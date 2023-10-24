@@ -14,5 +14,6 @@ public class Order {
     private String buyerDni;
     private String sellerDni;
     private  Long javaCoinsAmount;
+    private Long javaCoinPrice;
     private OrderState orderState;
 }
