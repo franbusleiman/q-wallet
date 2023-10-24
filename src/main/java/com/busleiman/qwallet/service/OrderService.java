@@ -1,5 +1,6 @@
 package com.busleiman.qwallet.service;
 
+import com.busleiman.qwallet.dto.OrderConfirmation;
 import com.busleiman.qwallet.dto.OrderRequest;
 import com.busleiman.qwallet.dto.WalletRequest;
 import com.busleiman.qwallet.model.Order;
@@ -60,6 +61,7 @@ public class OrderService {
     @PostConstruct
     private void init() {
         consume();
+        consume2();
     }
 
     @PreDestroy
@@ -115,16 +117,87 @@ public class OrderService {
         }).subscribe();
     }
 
+    public Disposable consume2() {
 
-    private Flux<OutboundMessage> outboundMessage(OrderRequest orderRequest) {
+        return receiver.consumeAutoAck(QUEUE).flatMap(message -> {
+
+            String json = new String(message.getBody(), StandardCharsets.UTF_8);
+            OrderConfirmation orderConfirmation;
+
+            try {
+                orderConfirmation = objectMapper.readValue(json, OrderConfirmation.class);
+            } catch (JsonProcessingException e) {
+                throw new RuntimeException(e);
+            }
+
+            return orderRepository.findById(orderConfirmation.getId())
+                    .flatMap(order -> {
+
+                        if (orderConfirmation.getOrderState().equals(OrderState.NOT_ACCEPTED)) {
+
+                            order.setOrderState(OrderState.NOT_ACCEPTED);
+
+                            return orderRepository.save(order)
+                                    .map(order1 -> {
+                                        OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
+
+                                        Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1);
+
+                                        return sender
+                                                .declareQueue(QueueSpecification.queue(QUEUE2))
+                                                .thenMany(sender.sendWithPublishConfirms(outbound))
+                                                .subscribe();
+                                    });
+
+                        } else if (orderConfirmation.getOrderState().equals(OrderState.ACCEPTED)) {
+
+                            walletAccountRepository.findById(order.getSellerDni())
+                                    .flatMap(sellerWalletAccount -> {
+
+                                        return walletAccountRepository.findById(order.getBuyerDni())
+                                                .flatMap(buyerAccount -> {
+                                                    sellerWalletAccount.setJavaCoins(sellerWalletAccount.getJavaCoins() - order.getJavaCoinsAmount());
+
+                                                    buyerAccount.setJavaCoins(buyerAccount.getJavaCoins() + order.getJavaCoinsAmount());
+
+                                                    return walletAccountRepository.save(sellerWalletAccount)
+                                                            .then(walletAccountRepository.save(buyerAccount))
+                                                            .flatMap(voidResult -> {
+                                                                order.setOrderState(OrderState.NOT_ACCEPTED);
+
+                                                                return orderRepository.save(order)
+                                                                        .map(order1 -> {
+                                                                            OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
+
+                                                                            Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1);
+
+                                                                            return sender
+                                                                                    .declareQueue(QueueSpecification.queue(QUEUE2))
+                                                                                    .thenMany(sender.sendWithPublishConfirms(outbound))
+                                                                                    .subscribe();
+                                                                        });
+                                                            });
+
+
+                                                }).switchIfEmpty(Mono.error(new Exception("User not found")));
+                                    });
+                        }
+                        return Mono.error(new Exception("Order Status unknown: " + orderConfirmation.getOrderState()));
+
+                    }).switchIfEmpty(Mono.error(new Exception("User not found")));
+        }).subscribe();
+    }
+
+
+    private Flux<OutboundMessage> outboundMessage(Object message) {
 
         String json1;
         try {
-            json1 = objectMapper.writeValueAsString(orderRequest);
+            json1 = objectMapper.writeValueAsString(message);
 
             long now = System.currentTimeMillis();
             long expirationTime = now + 3600000;
-            String subject = orderRequest.getBuyerDni();
+            String subject = "wallet system";
 
             String jwt = Jwts.builder()
                     .setSubject(subject)
@@ -143,6 +216,5 @@ public class OrderService {
             throw new RuntimeException(e);
         }
     }
-
 }
 
