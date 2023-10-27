@@ -163,7 +163,7 @@ public class OrderService {
                                                     return walletAccountRepository.save(sellerWalletAccount)
                                                             .then(walletAccountRepository.save(buyerAccount))
                                                             .flatMap(voidResult -> {
-                                                                order.setOrderState(OrderState.NOT_ACCEPTED);
+                                                                order.setOrderState(OrderState.ACCEPTED);
 
                                                                 return orderRepository.save(order)
                                                                         .map(order1 -> {
