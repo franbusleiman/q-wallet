@@ -197,7 +197,7 @@ public class OrderService {
 
             long now = System.currentTimeMillis();
             long expirationTime = now + 3600000;
-            String subject = "wallet system";
+            String subject = "wallet-service";
 
             String jwt = Jwts.builder()
                     .setSubject(subject)
