@@ -9,7 +9,7 @@ import lombok.experimental.SuperBuilder;
 @NoArgsConstructor
 @SuperBuilder
 public class WalletRequest {
-    private String orderId;
+    private Long id;
     private String buyerDni;
     private String sellerDni;
     private Long usdAmount;

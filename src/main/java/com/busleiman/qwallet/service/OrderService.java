@@ -5,6 +5,7 @@ import com.busleiman.qwallet.dto.OrderRequest;
 import com.busleiman.qwallet.dto.WalletRequest;
 import com.busleiman.qwallet.model.Order;
 import com.busleiman.qwallet.model.OrderState;
+import com.busleiman.qwallet.model.WalletAccount;
 import com.busleiman.qwallet.repository.WalletAccountRepository;
 import com.busleiman.qwallet.repository.OrderRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -44,8 +45,10 @@ public class OrderService {
     private final Sender sender;
     @Autowired
     private final ModelMapper modelMapper;
-    private static final String QUEUE = "Francisco";
-    private static final String QUEUE2 = "Francisco2";
+    private static final String QUEUE = "queue-C";
+    private static final String QUEUE2 = "queue-A";
+    private static final String QUEUE3 = "queue-X";
+
 
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -84,45 +87,46 @@ public class OrderService {
             }
 
             return walletAccountRepository.findById(walletRequest.getBuyerDni())
-                    .flatMap(buyerWalletAccount -> {
+                    .switchIfEmpty( Mono.defer(() -> {
 
+                        WalletAccount walletAccount =  WalletAccount.builder()
+                                .userDNI(walletRequest.getBuyerDni())
+                                .javaCoins(0L)
+                                .build();
+                        walletAccount.setUserDNI(walletRequest.getBuyerDni());
 
-                        return walletAccountRepository.findById(walletRequest.getSellerDni())
-                                .flatMap(sellerWalletAccount -> {
+                        return walletAccountRepository.save(walletAccount);
+                    })).flatMap(buyerWalletAccount -> {
 
-                                    if (sellerWalletAccount.getJavaCoins() < walletRequest.getUsdAmount() / walletRequest.getJavaCoinPrice()) {
-                                        return Mono.error(new Exception("No hay saldo suficiente"));
-                                    }
+                                Order order = Order.builder()
+                                        .id(walletRequest.getId())
+                                        .javaCoinPrice(walletRequest.getJavaCoinPrice())
+                                        .orderState(OrderState.IN_PROGRESS)
+                                        .buyerDni(walletRequest.getBuyerDni())
+                                        .javaCoinsAmount(walletRequest.getUsdAmount() / walletRequest.getJavaCoinPrice())
+                                        .build();
+                                return orderRepository.save(order)
+                                        .map(order1 -> {
+                                            OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
 
-                                    Order order = Order.builder()
-                                            .javaCoinPrice(walletRequest.getJavaCoinPrice())
-                                            .orderState(OrderState.IN_PROGRESS)
-                                            .sellerDni(walletRequest.getSellerDni())
-                                            .buyerDni(walletRequest.getBuyerDni())
-                                            .javaCoinsAmount(walletRequest.getUsdAmount() / walletRequest.getJavaCoinPrice())
-                                            .build();
-                                    return orderRepository.save(order)
-                                            .map(order1 -> {
-                                                OrderRequest orderRequest = modelMapper.map(order1, OrderRequest.class);
+                                            Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, QUEUE3);
 
-                                                Flux<OutboundMessage> outbound = outboundMessage(orderRequest);
-
-                                                return sender
-                                                        .declareQueue(QueueSpecification.queue(QUEUE2))
-                                                        .thenMany(sender.sendWithPublishConfirms(outbound))
-                                                        .subscribe();
-                                            });
-                                }).switchIfEmpty(Mono.error(new Exception("User not found")));
-                    }).switchIfEmpty(Mono.error(new Exception("User not found")));
-        }).subscribe();
-    }
+                                            return sender
+                                                    .declareQueue(QueueSpecification.queue(QUEUE3))
+                                                    .thenMany(sender.sendWithPublishConfirms(outbound))
+                                                    .subscribe();
+                                        });
+                            });
+    }).subscribe();
+}
 
     public Disposable consume2() {
 
-        return receiver.consumeAutoAck(QUEUE).flatMap(message -> {
+        return receiver.consumeAutoAck(QUEUE2).flatMap(message -> {
 
             String json = new String(message.getBody(), StandardCharsets.UTF_8);
             OrderConfirmation orderConfirmation;
+            System.out.println(json);
 
             try {
                 orderConfirmation = objectMapper.readValue(json, OrderConfirmation.class);
@@ -130,28 +134,29 @@ public class OrderService {
                 throw new RuntimeException(e);
             }
 
+            System.out.println("ID:   " + orderConfirmation.getId());
+
             return orderRepository.findById(orderConfirmation.getId())
                     .flatMap(order -> {
 
-                        if (orderConfirmation.getOrderState().equals(OrderState.NOT_ACCEPTED)) {
-
+                        if (orderConfirmation.getOrderState().equals("NOT_ACCEPTED")) {
                             order.setOrderState(OrderState.NOT_ACCEPTED);
-
                             return orderRepository.save(order)
                                     .map(order1 -> {
                                         OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
 
-                                        Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1);
+                                        Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, QUEUE3);
 
                                         return sender
-                                                .declareQueue(QueueSpecification.queue(QUEUE2))
+                                                .declareQueue(QueueSpecification.queue(QUEUE3))
                                                 .thenMany(sender.sendWithPublishConfirms(outbound))
                                                 .subscribe();
                                     });
 
-                        } else if (orderConfirmation.getOrderState().equals(OrderState.ACCEPTED)) {
+                        } else if (orderConfirmation.getOrderState().equals("ACCEPTED")) {
 
-                            walletAccountRepository.findById(order.getSellerDni())
+                            System.out.println("paso");
+                          return  walletAccountRepository.findById(orderConfirmation.getSellerDni())
                                     .flatMap(sellerWalletAccount -> {
 
                                         return walletAccountRepository.findById(order.getBuyerDni())
@@ -163,54 +168,40 @@ public class OrderService {
                                                     return walletAccountRepository.save(sellerWalletAccount)
                                                             .then(walletAccountRepository.save(buyerAccount))
                                                             .flatMap(voidResult -> {
+                                                                order.setSellerDni(orderConfirmation.getSellerDni());
                                                                 order.setOrderState(OrderState.ACCEPTED);
 
                                                                 return orderRepository.save(order)
                                                                         .map(order1 -> {
                                                                             OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
 
-                                                                            Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1);
+                                                                            Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, "queue-F");
 
                                                                             return sender
-                                                                                    .declareQueue(QueueSpecification.queue(QUEUE2))
+                                                                                    .declareQueue(QueueSpecification.queue("queue-F"))
                                                                                     .thenMany(sender.sendWithPublishConfirms(outbound))
                                                                                     .subscribe();
                                                                         });
                                                             });
-
-
                                                 }).switchIfEmpty(Mono.error(new Exception("User not found")));
                                     });
                         }
                         return Mono.error(new Exception("Order Status unknown: " + orderConfirmation.getOrderState()));
-
-                    }).switchIfEmpty(Mono.error(new Exception("User not found")));
+                    }).switchIfEmpty(Mono.error(new Exception("Order not found")));
         }).subscribe();
     }
 
 
-    private Flux<OutboundMessage> outboundMessage(Object message) {
+    private Flux<OutboundMessage> outboundMessage(Object message, String queue) {
 
-        String json1;
+        String json;
         try {
-            json1 = objectMapper.writeValueAsString(message);
-
-            long now = System.currentTimeMillis();
-            long expirationTime = now + 3600000;
-            String subject = "wallet-service";
-
-            String jwt = Jwts.builder()
-                    .setSubject(subject)
-                    .setIssuedAt(new Date(now))
-                    .setExpiration(new Date(expirationTime))
-                    .signWith(SignatureAlgorithm.HS256, "mySecretKey1239876123456123123123123132131231")
-                    .claim("message", json1)
-                    .compact();
+            json = objectMapper.writeValueAsString(message);
 
             return Flux.just(new OutboundMessage(
                     "",
-                    QUEUE2,
-                    jwt.getBytes()));
+                    queue,
+                    json.getBytes()));
 
         } catch (JsonProcessingException e) {
             throw new RuntimeException(e);
