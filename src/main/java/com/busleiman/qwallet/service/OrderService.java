@@ -18,6 +18,8 @@ import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.modelmapper.ModelMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -61,8 +63,8 @@ public class OrderService {
         this.sender = sender;
     }
 
-    @PostConstruct
-    private void init() {
+    @EventListener(ApplicationReadyEvent.class)
+    public void onApplicationReady() {
         consume();
         consume2();
     }
@@ -111,9 +113,7 @@ public class OrderService {
 
                                             Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, QUEUE3);
 
-                                            return sender
-                                                    .declareQueue(QueueSpecification.queue(QUEUE3))
-                                                    .thenMany(sender.sendWithPublishConfirms(outbound))
+                                            return sender.sendWithPublishConfirms(outbound)
                                                     .subscribe();
                                         });
                             });
@@ -177,9 +177,7 @@ public class OrderService {
 
                                                                             Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, "queue-F");
 
-                                                                            return sender
-                                                                                    .declareQueue(QueueSpecification.queue("queue-F"))
-                                                                                    .thenMany(sender.sendWithPublishConfirms(outbound))
+                                                                            return sender.sendWithPublishConfirms(outbound)
                                                                                     .subscribe();
                                                                         });
                                                             });
