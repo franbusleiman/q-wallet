@@ -1,19 +1,15 @@
 package com.busleiman.qwallet.service;
 
 import com.busleiman.qwallet.dto.OrderConfirmation;
-import com.busleiman.qwallet.dto.OrderRequest;
 import com.busleiman.qwallet.dto.WalletRequest;
 import com.busleiman.qwallet.model.Order;
 import com.busleiman.qwallet.model.OrderState;
 import com.busleiman.qwallet.model.WalletAccount;
-import com.busleiman.qwallet.repository.WalletAccountRepository;
 import com.busleiman.qwallet.repository.OrderRepository;
+import com.busleiman.qwallet.repository.WalletAccountRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rabbitmq.client.Connection;
-import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.SignatureAlgorithm;
-import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.modelmapper.ModelMapper;
@@ -25,12 +21,12 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.rabbitmq.OutboundMessage;
-import reactor.rabbitmq.QueueSpecification;
 import reactor.rabbitmq.Receiver;
 import reactor.rabbitmq.Sender;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Date;
+
+import static com.busleiman.qwallet.utils.Constants.*;
 
 
 @Service
@@ -47,10 +43,6 @@ public class OrderService {
     private final Sender sender;
     @Autowired
     private final ModelMapper modelMapper;
-    private static final String QUEUE = "queue-C";
-    private static final String QUEUE2 = "queue-A";
-    private static final String QUEUE3 = "queue-X";
-
 
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -77,7 +69,7 @@ public class OrderService {
 
     public Disposable consume() {
 
-        return receiver.consumeAutoAck(QUEUE).flatMap(message -> {
+        return receiver.consumeAutoAck(QUEUE_C).flatMap(message -> {
 
             String json = new String(message.getBody(), StandardCharsets.UTF_8);
             WalletRequest walletRequest;
@@ -89,9 +81,9 @@ public class OrderService {
             }
 
             return walletAccountRepository.findById(walletRequest.getBuyerDni())
-                    .switchIfEmpty( Mono.defer(() -> {
+                    .switchIfEmpty(Mono.defer(() -> {
 
-                        WalletAccount walletAccount =  WalletAccount.builder()
+                        WalletAccount walletAccount = WalletAccount.builder()
                                 .userDNI(walletRequest.getBuyerDni())
                                 .javaCoins(0L)
                                 .build();
@@ -100,41 +92,38 @@ public class OrderService {
                         return walletAccountRepository.save(walletAccount);
                     })).flatMap(buyerWalletAccount -> {
 
-                                Order order = Order.builder()
-                                        .id(walletRequest.getId())
-                                        .javaCoinPrice(walletRequest.getJavaCoinPrice())
-                                        .orderState(OrderState.IN_PROGRESS)
-                                        .buyerDni(walletRequest.getBuyerDni())
-                                        .javaCoinsAmount(walletRequest.getUsdAmount() / walletRequest.getJavaCoinPrice())
-                                        .build();
-                                return orderRepository.save(order)
-                                        .map(order1 -> {
-                                            OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
+                        Order order = Order.builder()
+                                .id(walletRequest.getId())
+                                .javaCoinPrice(walletRequest.getJavaCoinPrice())
+                                .orderState(OrderState.IN_PROGRESS)
+                                .buyerDni(walletRequest.getBuyerDni())
+                                .javaCoinsAmount(walletRequest.getUsdAmount() / walletRequest.getJavaCoinPrice())
+                                .build();
+                        return orderRepository.save(order)
+                                .map(order1 -> {
+                                    OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
 
-                                            Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, QUEUE3);
+                                    Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, QUEUE_G, QUEUES_EXCHANGE);
 
-                                            return sender.sendWithPublishConfirms(outbound)
-                                                    .subscribe();
-                                        });
-                            });
-    }).subscribe();
-}
+                                    return sender.send(outbound)
+                                            .subscribe();
+                                });
+                    });
+        }).subscribe();
+    }
 
     public Disposable consume2() {
 
-        return receiver.consumeAutoAck(QUEUE2).flatMap(message -> {
+        return receiver.consumeAutoAck(QUEUE_A).flatMap(message -> {
 
             String json = new String(message.getBody(), StandardCharsets.UTF_8);
             OrderConfirmation orderConfirmation;
-            System.out.println(json);
 
             try {
                 orderConfirmation = objectMapper.readValue(json, OrderConfirmation.class);
             } catch (JsonProcessingException e) {
                 throw new RuntimeException(e);
             }
-
-            System.out.println("ID:   " + orderConfirmation.getId());
 
             return orderRepository.findById(orderConfirmation.getId())
                     .flatMap(order -> {
@@ -145,18 +134,15 @@ public class OrderService {
                                     .map(order1 -> {
                                         OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
 
-                                        Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, QUEUE3);
+                                        Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, QUEUE_G, QUEUES_EXCHANGE);
 
-                                        return sender
-                                                .declareQueue(QueueSpecification.queue(QUEUE3))
-                                                .thenMany(sender.sendWithPublishConfirms(outbound))
+                                        return sender.sendWithPublishConfirms(outbound)
                                                 .subscribe();
                                     });
 
                         } else if (orderConfirmation.getOrderState().equals("ACCEPTED")) {
 
-                            System.out.println("paso");
-                          return  walletAccountRepository.findById(orderConfirmation.getSellerDni())
+                            return walletAccountRepository.findById(orderConfirmation.getSellerDni())
                                     .flatMap(sellerWalletAccount -> {
 
                                         return walletAccountRepository.findById(order.getBuyerDni())
@@ -175,9 +161,9 @@ public class OrderService {
                                                                         .map(order1 -> {
                                                                             OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
 
-                                                                            Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, "queue-F");
+                                                                            Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, QUEUE_F, QUEUES_EXCHANGE);
 
-                                                                            return sender.sendWithPublishConfirms(outbound)
+                                                                            return sender.send(outbound)
                                                                                     .subscribe();
                                                                         });
                                                             });
@@ -190,15 +176,15 @@ public class OrderService {
     }
 
 
-    private Flux<OutboundMessage> outboundMessage(Object message, String queue) {
+    private Flux<OutboundMessage> outboundMessage(Object message, String routingKey, String exchange) {
 
         String json;
         try {
             json = objectMapper.writeValueAsString(message);
 
             return Flux.just(new OutboundMessage(
-                    "",
-                    queue,
+                    exchange,
+                    routingKey,
                     json.getBytes()));
 
         } catch (JsonProcessingException e) {
