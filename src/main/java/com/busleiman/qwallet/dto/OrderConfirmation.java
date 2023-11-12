@@ -9,7 +9,8 @@ import lombok.experimental.SuperBuilder;
 @NoArgsConstructor
 @SuperBuilder
 public class OrderConfirmation {
-    private String id;
+    private Long id;
     private String sellerDni;
     private String orderState;
+    private String errorDescription;
 }

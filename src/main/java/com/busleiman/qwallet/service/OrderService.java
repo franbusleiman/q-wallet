@@ -119,6 +119,7 @@ public class OrderService {
             String json = new String(message.getBody(), StandardCharsets.UTF_8);
             OrderConfirmation orderConfirmation;
 
+
             try {
                 orderConfirmation = objectMapper.readValue(json, OrderConfirmation.class);
             } catch (JsonProcessingException e) {
@@ -131,14 +132,7 @@ public class OrderService {
                         if (orderConfirmation.getOrderState().equals("NOT_ACCEPTED")) {
                             order.setOrderState(OrderState.NOT_ACCEPTED);
                             return orderRepository.save(order)
-                                    .map(order1 -> {
-                                        OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
-
-                                        Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, QUEUE_G, QUEUES_EXCHANGE);
-
-                                        return sender.sendWithPublishConfirms(outbound)
-                                                .subscribe();
-                                    });
+                                    .map(order1 -> modelMapper.map(order, OrderConfirmation.class));
 
                         } else if (orderConfirmation.getOrderState().equals("ACCEPTED")) {
 
@@ -158,23 +152,37 @@ public class OrderService {
                                                                 order.setOrderState(OrderState.ACCEPTED);
 
                                                                 return orderRepository.save(order)
-                                                                        .map(order1 -> {
-                                                                            OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
-
-                                                                            Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, QUEUE_F, QUEUES_EXCHANGE);
-
-                                                                            return sender.send(outbound)
-                                                                                    .subscribe();
-                                                                        });
+                                                                        .map(order1 -> modelMapper.map(order, OrderConfirmation.class));
                                                             });
-                                                }).switchIfEmpty(Mono.error(new Exception("User not found")));
-                                    });
+                                                }).switchIfEmpty(orderConfirmationError(order.getId(),
+                                                        orderConfirmation.getSellerDni(), "User not found: " + order.getBuyerDni()));
+
+                                    }).switchIfEmpty(orderConfirmationError(order.getId(),
+                                            orderConfirmation.getSellerDni(), "User not found: " + orderConfirmation.getSellerDni()));
                         }
-                        return Mono.error(new Exception("Order Status unknown: " + orderConfirmation.getOrderState()));
-                    }).switchIfEmpty(Mono.error(new Exception("Order not found")));
+                        return orderConfirmationError(order.getId(),
+                                orderConfirmation.getSellerDni(), "Order status known: " + orderConfirmation.getOrderState());
+
+                    }).switchIfEmpty(orderConfirmationError(orderConfirmation.getId(),
+                            orderConfirmation.getSellerDni(), "Order not found: " + orderConfirmation.getId()))
+
+                    .map(orderConfirmation1 -> {
+                        Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, QUEUE_F, QUEUES_EXCHANGE);
+
+                        return sender.send(outbound)
+                                .subscribe();
+                    });
         }).subscribe();
     }
 
+    public Mono<OrderConfirmation> orderConfirmationError(Long orderId, String sellerDni, String error) {
+        return Mono.just(OrderConfirmation.builder()
+                .id(orderId)
+                .orderState("NOT_ACCEPTED")
+                .sellerDni(sellerDni)
+                .errorDescription(error)
+                .build());
+    }
 
     private Flux<OutboundMessage> outboundMessage(Object message, String routingKey, String exchange) {
 
