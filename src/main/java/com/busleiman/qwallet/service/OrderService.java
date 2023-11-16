@@ -74,6 +74,7 @@ public class OrderService {
             String json = new String(message.getBody(), StandardCharsets.UTF_8);
             WalletRequest walletRequest;
 
+
             try {
                 walletRequest = objectMapper.readValue(json, WalletRequest.class);
             } catch (JsonProcessingException e) {
@@ -95,14 +96,13 @@ public class OrderService {
                         Order order = Order.builder()
                                 .id(walletRequest.getId())
                                 .javaCoinPrice(walletRequest.getJavaCoinPrice())
-                                .orderState(OrderState.IN_PROGRESS)
+                                .orderState(OrderState.ACCEPTED)
                                 .buyerDni(walletRequest.getBuyerDni())
                                 .javaCoinsAmount(walletRequest.getUsdAmount() / walletRequest.getJavaCoinPrice())
                                 .build();
                         return orderRepository.save(order)
                                 .map(order1 -> {
                                     OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
-
                                     Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, QUEUE_G, QUEUES_EXCHANGE);
 
                                     return sender.send(outbound)
@@ -129,12 +129,17 @@ public class OrderService {
             return orderRepository.findById(orderConfirmation.getId())
                     .flatMap(order -> {
 
-                        if (orderConfirmation.getOrderState().equals("NOT_ACCEPTED")) {
+                        if (orderConfirmation.getOrderState() == OrderState.NOT_ACCEPTED) {
+                            order.setSellerDni(orderConfirmation.getSellerDni());
                             order.setOrderState(OrderState.NOT_ACCEPTED);
                             return orderRepository.save(order)
-                                    .map(order1 -> modelMapper.map(order, OrderConfirmation.class));
+                                    .map(order1 -> {
+                                        OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
+                                        orderConfirmation1.setErrorDescription("Order not accepted");
+                                        return orderConfirmation1;
+                                    });
 
-                        } else if (orderConfirmation.getOrderState().equals("ACCEPTED")) {
+                        } else if (orderConfirmation.getOrderState() == OrderState.ACCEPTED) {
 
                             return walletAccountRepository.findById(orderConfirmation.getSellerDni())
                                     .flatMap(sellerWalletAccount -> {
@@ -178,7 +183,7 @@ public class OrderService {
     public Mono<OrderConfirmation> orderConfirmationError(Long orderId, String sellerDni, String error) {
         return Mono.just(OrderConfirmation.builder()
                 .id(orderId)
-                .orderState("NOT_ACCEPTED")
+                .orderState(OrderState.NOT_ACCEPTED)
                 .sellerDni(sellerDni)
                 .errorDescription(error)
                 .build());

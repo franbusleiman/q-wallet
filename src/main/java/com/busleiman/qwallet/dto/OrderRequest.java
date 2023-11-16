@@ -15,4 +15,5 @@ public class OrderRequest {
     private  Long javaCoinsAmount;
     private Long javaCoinPrice;
     private OrderState orderState;
+
 }

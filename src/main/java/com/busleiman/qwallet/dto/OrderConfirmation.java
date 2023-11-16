@@ -11,6 +11,6 @@ import lombok.experimental.SuperBuilder;
 public class OrderConfirmation {
     private Long id;
     private String sellerDni;
-    private String orderState;
+    private OrderState orderState;
     private String errorDescription;
 }
