@@ -116,11 +116,14 @@ public class OrderService {
 
     /**
      * Se recibe el mensaje order confirmation por parte del servicio Web.
-     *
-     * Se registra el estado de aceptado o no aceptado.
+     *<p>
+     * Se chequea el estado de aceptado o no aceptado.
+     * <p>
+     * En el caso de que NO se acepto, se registra el estado en la orden y se guarda.
+     * <p>
      * En el caso de que SI se acepto, se buscan los usuarios comprador y vendedor, y se hace el descuento de
      * javaCoins de la cuenta vendedor, y se le acreditan al comprador.
-     *
+     *<p>
      * Ante cualquier error, se envía un mensaje de orden no aceptada al servicio wallet, con la descripción del error.
      */
     public Flux<Void> consume2() {
