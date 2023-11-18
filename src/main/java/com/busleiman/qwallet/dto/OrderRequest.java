@@ -1,6 +1,6 @@
 package com.busleiman.qwallet.dto;
 
-import com.busleiman.qwallet.model.OrderState;
+
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
@@ -9,11 +9,8 @@ import lombok.experimental.SuperBuilder;
 @NoArgsConstructor
 @SuperBuilder
 public class OrderRequest {
-    private String id;
+    private Long id;
     private String buyerDni;
-    private String sellerDni;
-    private  Long javaCoinsAmount;
-    private Long javaCoinPrice;
-    private OrderState orderState;
-
+    private Double usdAmount;
+    private Double javaCoinPrice;
 }

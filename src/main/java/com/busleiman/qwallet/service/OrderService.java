@@ -1,7 +1,7 @@
 package com.busleiman.qwallet.service;
 
 import com.busleiman.qwallet.dto.OrderConfirmation;
-import com.busleiman.qwallet.dto.WalletRequest;
+import com.busleiman.qwallet.dto.OrderRequest;
 import com.busleiman.qwallet.model.Order;
 import com.busleiman.qwallet.model.OrderState;
 import com.busleiman.qwallet.model.WalletAccount;
@@ -57,8 +57,8 @@ public class OrderService {
 
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
-        consume();
-        consume2();
+        consume().subscribe();
+        consume2().subscribe();
     }
 
     @PreDestroy
@@ -66,59 +66,69 @@ public class OrderService {
         connectionMono.block().close();
     }
 
-
-    public Disposable consume() {
+    /**
+     * Se recibe el mensaje order request por parte del servicio Web.
+     * Se chequea si el usuario comprador existe, y si no, se crea.
+     * Finalmente se registra la orden, y se envía el mensaje de confirmación al servicio Web.
+     */
+    public Flux<Void> consume() {
 
         return receiver.consumeAutoAck(QUEUE_C).flatMap(message -> {
 
             String json = new String(message.getBody(), StandardCharsets.UTF_8);
-            WalletRequest walletRequest;
-
+            OrderRequest orderRequest;
 
             try {
-                walletRequest = objectMapper.readValue(json, WalletRequest.class);
+                orderRequest = objectMapper.readValue(json, OrderRequest.class);
             } catch (JsonProcessingException e) {
                 throw new RuntimeException(e);
             }
 
-            return walletAccountRepository.findById(walletRequest.getBuyerDni())
+            return walletAccountRepository.findById(orderRequest.getBuyerDni())
                     .switchIfEmpty(Mono.defer(() -> {
 
                         WalletAccount walletAccount = WalletAccount.builder()
-                                .userDNI(walletRequest.getBuyerDni())
-                                .javaCoins(0L)
+                                .userDNI(orderRequest.getBuyerDni())
+                                .javaCoins(0.0)
                                 .build();
-                        walletAccount.setUserDNI(walletRequest.getBuyerDni());
+                        walletAccount.setUserDNI(orderRequest.getBuyerDni());
 
                         return walletAccountRepository.save(walletAccount);
                     })).flatMap(buyerWalletAccount -> {
 
                         Order order = Order.builder()
-                                .id(walletRequest.getId())
-                                .javaCoinPrice(walletRequest.getJavaCoinPrice())
+                                .id(orderRequest.getId())
+                                .javaCoinPrice(orderRequest.getJavaCoinPrice())
                                 .orderState(OrderState.ACCEPTED)
-                                .buyerDni(walletRequest.getBuyerDni())
-                                .javaCoinsAmount(walletRequest.getUsdAmount() / walletRequest.getJavaCoinPrice())
+                                .buyerDni(orderRequest.getBuyerDni())
+                                .javaCoinsAmount(orderRequest.getUsdAmount() / orderRequest.getJavaCoinPrice())
                                 .build();
                         return orderRepository.save(order)
-                                .map(order1 -> {
+                                .flatMap(order1 -> {
                                     OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
                                     Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, QUEUE_G, QUEUES_EXCHANGE);
 
-                                    return sender.send(outbound)
-                                            .subscribe();
+                                    return sender.send(outbound);
                                 });
                     });
-        }).subscribe();
+        });
     }
 
-    public Disposable consume2() {
+    /**
+     * Se recibe el mensaje order confirmation por parte del servicio Web.
+     *
+     * Se registra el estado de aceptado o no aceptado.
+     * En el caso de que SI se acepto, se buscan los usuarios comprador y vendedor, y se hace el descuento de
+     * javaCoins de la cuenta vendedor, y se le acreditan al comprador.
+     *
+     * Ante cualquier error, se envía un mensaje de orden no aceptada al servicio wallet, con la descripción del error.
+     */
+    public Flux<Void> consume2() {
 
         return receiver.consumeAutoAck(QUEUE_A).flatMap(message -> {
 
             String json = new String(message.getBody(), StandardCharsets.UTF_8);
             OrderConfirmation orderConfirmation;
-
 
             try {
                 orderConfirmation = objectMapper.readValue(json, OrderConfirmation.class);
@@ -130,12 +140,13 @@ public class OrderService {
                     .flatMap(order -> {
 
                         if (orderConfirmation.getOrderState() == OrderState.NOT_ACCEPTED) {
+
                             order.setSellerDni(orderConfirmation.getSellerDni());
                             order.setOrderState(OrderState.NOT_ACCEPTED);
                             return orderRepository.save(order)
                                     .map(order1 -> {
                                         OrderConfirmation orderConfirmation1 = modelMapper.map(order, OrderConfirmation.class);
-                                        orderConfirmation1.setErrorDescription("Order not accepted");
+                                        orderConfirmation1.setErrorDescription(orderConfirmation.getErrorDescription());
                                         return orderConfirmation1;
                                     });
 
@@ -171,15 +182,19 @@ public class OrderService {
                     }).switchIfEmpty(orderConfirmationError(orderConfirmation.getId(),
                             orderConfirmation.getSellerDni(), "Order not found: " + orderConfirmation.getId()))
 
-                    .map(orderConfirmation1 -> {
+                    .flatMap(orderConfirmation1 -> {
                         Flux<OutboundMessage> outbound = outboundMessage(orderConfirmation1, QUEUE_F, QUEUES_EXCHANGE);
 
-                        return sender.send(outbound)
-                                .subscribe();
+                        return sender.send(outbound);
                     });
-        }).subscribe();
+        });
     }
 
+
+    /**
+     * Facilitador para crear mensajes de error.
+     *
+     */
     public Mono<OrderConfirmation> orderConfirmationError(Long orderId, String sellerDni, String error) {
         return Mono.just(OrderConfirmation.builder()
                 .id(orderId)
@@ -189,6 +204,10 @@ public class OrderService {
                 .build());
     }
 
+    /**
+     * Se crea un mensaje, en el cual se especifica exchange, routing-key y cuerpo del mismo.
+     *
+     */
     private Flux<OutboundMessage> outboundMessage(Object message, String routingKey, String exchange) {
 
         String json;

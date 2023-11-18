@@ -13,4 +13,5 @@ public class OrderConfirmation {
     private String sellerDni;
     private OrderState orderState;
     private String errorDescription;
+    private SourceType sourceType = SourceType.WALLET;
 }

@@ -13,6 +13,6 @@ public class WalletAccount {
     @Id
     private String userDNI;
 
-    private Long javaCoins;
+    private Double javaCoins;
 
 }
