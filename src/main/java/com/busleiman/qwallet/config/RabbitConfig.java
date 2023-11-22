@@ -21,7 +21,7 @@ public class RabbitConfig {
     Mono<Connection> connectionMono() {
         ConnectionFactory connectionFactory = new ConnectionFactory();
         connectionFactory.useNio();
-        return Mono.fromCallable(() -> connectionFactory.newConnection("http://localhost:15672/#/nodes/rabbit%40C11-P31HQN68UOB")).cache();
+        return Mono.fromCallable(() -> connectionFactory.newConnection("rabbitmq")).cache();
     }
 
     @Bean

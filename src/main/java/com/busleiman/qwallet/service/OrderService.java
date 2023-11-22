@@ -116,7 +116,7 @@ public class OrderService {
 
     /**
      * Se recibe el mensaje order confirmation por parte del servicio Web.
-     *<p>
+     * <p>
      * Se chequea el estado de aceptado o no aceptado.
      * <p>
      * En el caso de que NO se acepto, se registra el estado en la orden y se guarda.
